@@ -16,20 +16,24 @@ import (
 )
 
 type ServerConfig struct {
-	Listen       string
-	StatusListen string
-	OpenTimeout  time.Duration
-	Token        string
+	Listen                string
+	StatusListen          string
+	OpenTimeout           time.Duration
+	MaxPendingConnections int
+	MaxActiveConnections  int
+	Token                 string
 }
 
 const initialHeaderTimeout = 10 * time.Second
 
 type serverState struct {
-	serverListen string
-	statusListen string
-	mu           sync.Mutex
-	tunnels      map[*tunnel]struct{}
-	totals       statusTotals
+	serverListen          string
+	statusListen          string
+	maxPendingConnections int
+	maxActiveConnections  int
+	mu                    sync.Mutex
+	tunnels               map[*tunnel]struct{}
+	totals                statusTotals
 }
 
 type statusTotals struct {
@@ -98,6 +102,18 @@ func RunServer(ctx context.Context, cfg ServerConfig, logger *log.Logger) error 
 	if cfg.OpenTimeout <= 0 {
 		return fmt.Errorf("open timeout must be positive")
 	}
+	if cfg.MaxPendingConnections == 0 {
+		cfg.MaxPendingConnections = defaultMaxPending
+	}
+	if cfg.MaxActiveConnections == 0 {
+		cfg.MaxActiveConnections = defaultMaxActive
+	}
+	if cfg.MaxPendingConnections < 0 {
+		return fmt.Errorf("max pending connections must be positive")
+	}
+	if cfg.MaxActiveConnections < 0 {
+		return fmt.Errorf("max active connections must be positive")
+	}
 
 	tunnelListener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
@@ -112,9 +128,11 @@ func RunServer(ctx context.Context, cfg ServerConfig, logger *log.Logger) error 
 	defer statusListener.Close()
 
 	state := &serverState{
-		serverListen: tunnelListener.Addr().String(),
-		statusListen: statusListener.Addr().String(),
-		tunnels:      make(map[*tunnel]struct{}),
+		serverListen:          tunnelListener.Addr().String(),
+		statusListen:          statusListener.Addr().String(),
+		maxPendingConnections: cfg.MaxPendingConnections,
+		maxActiveConnections:  cfg.MaxActiveConnections,
+		tunnels:               make(map[*tunnel]struct{}),
 	}
 	httpServer := &http.Server{Handler: statusHandler(state)}
 	go func() {
@@ -231,6 +249,11 @@ func (t *tunnel) run() {
 		}
 		enableKeepAlive(remoteConn)
 		t.state.incRemote()
+		if !t.canAcceptRemote() {
+			t.logger.Printf("remote connection rejected on %s: tunnel capacity reached", t.remote)
+			remoteConn.Close()
+			continue
+		}
 		id, err := randomID()
 		if err != nil {
 			remoteConn.Close()
@@ -256,6 +279,15 @@ func (t *tunnel) run() {
 			return
 		}
 	}
+}
+
+func (t *tunnel) canAcceptRemote() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.pending) >= t.state.maxPendingConnections {
+		return false
+	}
+	return t.activeConnectionCountLocked() < t.state.maxActiveConnections
 }
 
 func (t *tunnel) watchControl() {
@@ -284,6 +316,14 @@ func handleDataConn(cfg ServerConfig, state *serverState, logger *log.Logger, co
 		logger.Printf("rejected data connection from %s", conn.RemoteAddr())
 		fmt.Fprintln(conn, "ERR")
 		conn.Close()
+		return
+	}
+	if !t.canActivate() {
+		state.incRejectedData()
+		logger.Printf("rejected data connection from %s: tunnel active capacity reached", conn.RemoteAddr())
+		conn.Close()
+		pc.timer.Stop()
+		pc.remote.Close()
 		return
 	}
 	state.incAcceptedData()
@@ -321,10 +361,20 @@ func (t *tunnel) addActive(conn net.Conn) {
 	t.mu.Unlock()
 }
 
+func (t *tunnel) canActivate() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.activeConnectionCountLocked() < t.state.maxActiveConnections
+}
+
 func (t *tunnel) removeActive(conn net.Conn) {
 	t.mu.Lock()
 	delete(t.active, conn)
 	t.mu.Unlock()
+}
+
+func (t *tunnel) activeConnectionCountLocked() int {
+	return len(t.active) / 2
 }
 
 func (s *serverState) takePending(id string) (*tunnel, *pendingConn) {

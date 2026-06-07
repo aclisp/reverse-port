@@ -37,7 +37,7 @@ curl http://127.0.0.1:9001/status
 Server:
 
 ```bash
-rpf server [--listen :9000] [--status-listen 127.0.0.1:9001] [--open-timeout 10s] [--token secret]
+rpf server [--listen :9000] [--status-listen 127.0.0.1:9001] [--open-timeout 10s] [--max-pending 128] [--max-active 1024] [--token secret]
 ```
 
 Client:
@@ -48,6 +48,9 @@ rpf client --server host:port --remote [bind_address:]port --target host:hostpor
 
 `--token` overrides `RPORT_TOKEN`. Tokens are required and must not be empty or
 contain whitespace.
+
+`--max-pending` and `--max-active` are per-tunnel limits. When a tunnel reaches
+capacity, extra remote callers are closed instead of being queued indefinitely.
 
 ## Remote Address Semantics
 

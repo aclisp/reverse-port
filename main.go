@@ -17,6 +17,8 @@ const (
 	defaultStatusListen      = "127.0.0.1:9001"
 	defaultOpenTimeout       = 10 * time.Second
 	defaultReconnectInterval = 5 * time.Second
+	defaultMaxPending        = 128
+	defaultMaxActive         = 1024
 )
 
 func main() {
@@ -64,9 +66,11 @@ func runMain(args []string, getenv func(string) string, _, stderr io.Writer) int
 
 func parseServerFlags(args []string, getenv func(string) string, stderr io.Writer) (ServerConfig, bool) {
 	cfg := ServerConfig{
-		Listen:       defaultListen,
-		StatusListen: defaultStatusListen,
-		OpenTimeout:  defaultOpenTimeout,
+		Listen:                defaultListen,
+		StatusListen:          defaultStatusListen,
+		OpenTimeout:           defaultOpenTimeout,
+		MaxPendingConnections: defaultMaxPending,
+		MaxActiveConnections:  defaultMaxActive,
 	}
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -74,6 +78,8 @@ func parseServerFlags(args []string, getenv func(string) string, stderr io.Write
 	fs.StringVar(&cfg.Listen, "listen", cfg.Listen, "tunnel listen address")
 	fs.StringVar(&cfg.StatusListen, "status-listen", cfg.StatusListen, "loopback HTTP status listen address")
 	fs.DurationVar(&cfg.OpenTimeout, "open-timeout", cfg.OpenTimeout, "pending data attach timeout")
+	fs.IntVar(&cfg.MaxPendingConnections, "max-pending", cfg.MaxPendingConnections, "maximum pending remote connections per tunnel")
+	fs.IntVar(&cfg.MaxActiveConnections, "max-active", cfg.MaxActiveConnections, "maximum active forwarded connections per tunnel")
 	fs.StringVar(&token, "token", "", "shared authentication token")
 	if err := fs.Parse(args); err != nil {
 		serverUsage(stderr)
@@ -102,6 +108,16 @@ func parseServerFlags(args []string, getenv func(string) string, stderr io.Write
 	}
 	if cfg.OpenTimeout <= 0 {
 		fmt.Fprintln(stderr, "--open-timeout must be positive")
+		serverUsage(stderr)
+		return cfg, false
+	}
+	if cfg.MaxPendingConnections <= 0 {
+		fmt.Fprintln(stderr, "--max-pending must be positive")
+		serverUsage(stderr)
+		return cfg, false
+	}
+	if cfg.MaxActiveConnections <= 0 {
+		fmt.Fprintln(stderr, "--max-active must be positive")
 		serverUsage(stderr)
 		return cfg, false
 	}
@@ -177,7 +193,7 @@ func printTopUsage(w io.Writer) {
 }
 
 func serverUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: rpf server [--listen :9000] [--status-listen 127.0.0.1:9001] [--open-timeout 10s] [--token secret]")
+	fmt.Fprintln(w, "usage: rpf server [--listen :9000] [--status-listen 127.0.0.1:9001] [--open-timeout 10s] [--max-pending 128] [--max-active 1024] [--token secret]")
 }
 
 func clientUsage(w io.Writer) {
