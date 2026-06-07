@@ -43,12 +43,12 @@ func TestAddressValidationRejectsInvalidInputs(t *testing.T) {
 }
 
 func TestValidateStatusListenLoopbackOnly(t *testing.T) {
-	for _, in := range []string{"127.0.0.1:9001", "localhost:9001", "[::1]:9001"} {
+	for _, in := range []string{"127.0.0.1:9001", "[::1]:9001"} {
 		if err := validateStatusListen(in); err != nil {
 			t.Fatalf("validateStatusListen(%q) error = %v", in, err)
 		}
 	}
-	for _, in := range []string{":9001", "0.0.0.0:9001", "[::]:9001"} {
+	for _, in := range []string{":9001", "localhost:9001", "0.0.0.0:9001", "[::]:9001"} {
 		if err := validateStatusListen(in); err == nil {
 			t.Fatalf("validateStatusListen(%q) succeeded unexpectedly", in)
 		}

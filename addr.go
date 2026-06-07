@@ -90,18 +90,9 @@ func validateStatusListen(addr string) error {
 	if host == "" {
 		return fmt.Errorf("status listener must bind loopback")
 	}
-	ips, err := net.LookupIP(host)
-	if err == nil && len(ips) > 0 {
-		for _, ip := range ips {
-			if ip.IsLoopback() {
-				return nil
-			}
-		}
-		return fmt.Errorf("status listener must bind loopback")
-	}
 	ip := net.ParseIP(host)
 	if ip == nil || !ip.IsLoopback() {
-		return fmt.Errorf("status listener must bind loopback")
+		return fmt.Errorf("status listener must use a literal loopback IP")
 	}
 	return nil
 }
