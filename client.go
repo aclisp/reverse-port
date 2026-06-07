@@ -58,6 +58,15 @@ func runClientSession(ctx context.Context, cfg ClientConfig, logger *log.Logger)
 		return err
 	}
 	defer conn.Close()
+	sessionDone := make(chan struct{})
+	defer close(sessionDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			conn.Close()
+		case <-sessionDone:
+		}
+	}()
 	enableKeepAlive(conn)
 	if err := writeControlHeader(conn, cfg.Token, cfg.Remote, cfg.Target); err != nil {
 		return err

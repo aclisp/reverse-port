@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -179,6 +180,83 @@ func TestTargetFailureClosesRemoteCaller(t *testing.T) {
 	}
 	if ne, ok := err.(net.Error); ok && ne.Timeout() {
 		t.Fatalf("remote caller did not close after target failure")
+	}
+}
+
+func TestClientStopsOnContextCancel(t *testing.T) {
+	serverAddr := freeTCPAddr(t)
+	statusAddr := freeTCPAddr(t)
+	remoteAddr := freeTCPAddr(t)
+	targetAddr, closeTarget := startEchoServer(t)
+	defer closeTarget()
+
+	serverCtx, stopServer := context.WithCancel(context.Background())
+	defer stopServer()
+	go func() {
+		err := RunServer(serverCtx, ServerConfig{
+			Listen:       serverAddr,
+			StatusListen: statusAddr,
+			OpenTimeout:  time.Second,
+			Token:        "secret",
+		}, testLogger(t))
+		if err != nil {
+			t.Errorf("RunServer error = %v", err)
+		}
+	}()
+	waitForDial(t, serverAddr)
+
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	clientDone := make(chan error, 1)
+	go func() {
+		clientDone <- RunClient(clientCtx, ClientConfig{
+			Server:            serverAddr,
+			Remote:            remoteAddr,
+			Target:            targetAddr,
+			Token:             "secret",
+			ReconnectInterval: time.Second,
+		}, testLogger(t))
+	}()
+	waitForDial(t, remoteAddr)
+
+	stopClient()
+	select {
+	case err := <-clientDone:
+		if err != nil {
+			t.Fatalf("RunClient returned error after cancel: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunClient did not stop after context cancellation")
+	}
+}
+
+func TestServerCancelDoesNotLogStatusAcceptClosed(t *testing.T) {
+	serverAddr := freeTCPAddr(t)
+	statusAddr := freeTCPAddr(t)
+	var logs bytes.Buffer
+
+	serverCtx, stopServer := context.WithCancel(context.Background())
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- RunServer(serverCtx, ServerConfig{
+			Listen:       serverAddr,
+			StatusListen: statusAddr,
+			OpenTimeout:  time.Second,
+			Token:        "secret",
+		}, log.New(&logs, "", 0))
+	}()
+	waitForDial(t, serverAddr)
+
+	stopServer()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("RunServer returned error after cancel: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunServer did not stop after context cancellation")
+	}
+	if strings.Contains(logs.String(), "status server stopped") || strings.Contains(logs.String(), "use of closed network connection") {
+		t.Fatalf("server logged expected shutdown noise: %s", logs.String())
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -120,7 +121,7 @@ func RunServer(ctx context.Context, cfg ServerConfig, logger *log.Logger) error 
 		httpServer.Shutdown(context.Background())
 	}()
 	go func() {
-		if err := httpServer.Serve(statusListener); err != nil && err != http.ErrServerClosed {
+		if err := httpServer.Serve(statusListener); err != nil && err != http.ErrServerClosed && !errors.Is(err, net.ErrClosed) && ctx.Err() == nil {
 			logger.Printf("status server stopped: %v", err)
 		}
 	}()
