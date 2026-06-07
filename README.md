@@ -52,6 +52,44 @@ contain whitespace.
 `--max-pending` and `--max-active` are per-tunnel limits. When a tunnel reaches
 capacity, extra remote callers are closed instead of being queued indefinitely.
 
+## How it works
+
+`rpf` uses two TCP connection roles: **control** and **data**.
+
+```
+                         ┌─────── Server ───────┐         ┌─── Client ───┐
+                         │                      │         │              │
+  remote caller ────────▶│ :8080  (remote)      │  OPEN   │              │
+                         │    │                 │────────▶│              │
+                         │    ▼                 │         │   ┌──────┐   │
+                         │  (pending)           │         │   │target│   │
+                         │                      │  DATA   │   │:3000 │   │
+                         │ :9000  (tunnel)      │◀────────│   └──▲───┘   │
+                         │                      │         │      │       │
+                         └──────────────────────┘         └──────┴───────┘
+```
+
+Three TCP connections are involved:
+
+- **control** — persistent connection between client and server on the tunnel port
+- **data** — one short-lived connection per forwarded request from client back to server
+- **target** — client-side connection to the local service
+
+1. **Startup.** The client dials the server's tunnel port and sends a `CONTROL` header
+   containing its token, the remote bind address, and the target address. The server
+   replies `OK` and starts a TCP listener on the remote address.
+
+2. **Forwarding.** When a remote caller connects to the remote listener, the server
+   holds the connection and sends `OPEN <id>` back to the client over the control channel.
+
+3. **Data attach.** The client dials the server again, sends a `DATA` header with its
+   token and the connection id, then dials the local target. Once the data connection
+   is established, the server pipes the remote caller's traffic to the data connection
+   and the client pipes the data connection to the target.
+
+4. **Reconnect.** If the control connection drops, the client retries on a fixed
+   interval. No state is preserved between sessions.
+
 ## Remote Address Semantics
 
 - `--remote 8080` binds `127.0.0.1:8080`
@@ -73,6 +111,18 @@ traffic confidentiality matters.
 The status endpoint has no auth in v1 and is intentionally restricted to a
 loopback listen address. Status responses do not include tokens or connection
 IDs.
+
+## Resources
+
+For N connected clients and M simultaneously active (forwarded) connections:
+
+| Resource | Formula |
+|---|---|
+| Established TCP connections | N + 3M |
+| Server listeners | N + 2 |
+| Total goroutines (server + all clients) | 2 + 4N + 8M |
+
+Per-tunnel overhead: 1 persistent TCP connection, 2 server goroutines, 2 client goroutines. Per active forwarded connection: 3 TCP connections and 8 goroutines (4 server-side, 4 client-side).
 
 ## Verification
 

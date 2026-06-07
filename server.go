@@ -330,11 +330,9 @@ func handleDataConn(cfg ServerConfig, state *serverState, logger *log.Logger, co
 	pc.timer.Stop()
 	t.addActive(conn)
 	t.addActive(pc.remote)
-	go func() {
-		defer t.removeActive(conn)
-		defer t.removeActive(pc.remote)
-		pipeBidirectional(t.ctx, pc.remote, conn)
-	}()
+	defer t.removeActive(conn)
+	defer t.removeActive(pc.remote)
+	pipeBidirectional(t.ctx, pc.remote, conn)
 }
 
 func (t *tunnel) close() {
