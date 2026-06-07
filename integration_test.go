@@ -260,6 +260,20 @@ func TestServerCancelDoesNotLogStatusAcceptClosed(t *testing.T) {
 	}
 }
 
+func TestInitialHeaderReadTimesOut(t *testing.T) {
+	serverSide, clientSide := net.Pipe()
+	defer clientSide.Close()
+
+	start := time.Now()
+	_, err := readInitialHeader(serverSide, 30*time.Millisecond)
+	if err == nil {
+		t.Fatal("readInitialHeader succeeded unexpectedly")
+	}
+	if time.Since(start) > time.Second {
+		t.Fatal("readInitialHeader did not time out promptly")
+	}
+}
+
 func startEchoServer(t *testing.T) (string, func()) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

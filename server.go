@@ -22,6 +22,8 @@ type ServerConfig struct {
 	Token        string
 }
 
+const initialHeaderTimeout = 10 * time.Second
+
 type serverState struct {
 	serverListen string
 	statusListen string
@@ -142,7 +144,7 @@ func RunServer(ctx context.Context, cfg ServerConfig, logger *log.Logger) error 
 }
 
 func handleServerConn(ctx context.Context, cfg ServerConfig, state *serverState, logger *log.Logger, conn net.Conn) {
-	line, err := readHeader(conn)
+	line, err := readInitialHeader(conn, initialHeaderTimeout)
 	if err != nil {
 		state.incRejectedControl()
 		logger.Printf("malformed connection from %s", conn.RemoteAddr())
@@ -159,6 +161,19 @@ func handleServerConn(ctx context.Context, cfg ServerConfig, state *serverState,
 		logger.Printf("malformed connection from %s", conn.RemoteAddr())
 		conn.Close()
 	}
+}
+
+func readInitialHeader(conn net.Conn, timeout time.Duration) (string, error) {
+	if timeout > 0 {
+		if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
+			return "", err
+		}
+	}
+	line, err := readHeader(conn)
+	if clearErr := conn.SetReadDeadline(time.Time{}); err == nil && clearErr != nil {
+		return "", clearErr
+	}
+	return line, err
 }
 
 func handleControlConn(ctx context.Context, cfg ServerConfig, state *serverState, logger *log.Logger, conn net.Conn, line string) {
