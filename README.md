@@ -57,6 +57,43 @@ control connection heartbeats. If a client does not answer `PING` with `PONG`
 before the timeout, the server closes that tunnel and releases its remote
 listener.
 
+## Run as backend service
+
+Create a service file in `/lib/systemd/system/reverse-port-forwarding.service`:
+
+```conf
+[Unit]
+# describe the app
+Description=reverse-port-forwarding
+# start the app after the network is available
+After=network.target
+
+[Service]
+# usually you'll use 'simple'
+# one of https://www.freedesktop.org/software/systemd/man/systemd.service.html#Type=
+Type=simple
+# which user to use when starting the app
+User=rpf
+# path to your application's root directory
+WorkingDirectory=/opt/reverse-port
+# the command to start the app
+# requires absolute paths
+Environment="RPORT_TOKEN=change-this-token"
+ExecStart=/opt/reverse-port/rpf server --listen :9000 --status-listen 127.0.0.1:9001
+KillSignal=SIGTERM
+# How long systemd waits for the app to stop before sending SIGKILL
+TimeoutStopSec=30s
+# Ensures systemd only considers the main process for the stop signal
+KillMode=control-group
+# restart policy
+# one of {no|on-success|on-failure|on-abnormal|on-watchdog|on-abort|always}
+Restart=always
+
+[Install]
+# start the app automatically
+WantedBy=multi-user.target
+```
+
 ## How it works
 
 `rpf` uses two TCP connection roles: **control** and **data**.
