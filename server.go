@@ -72,20 +72,21 @@ type tunnelSummary struct {
 }
 
 type tunnel struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	state    *serverState
-	logger   *log.Logger
-	control  net.Conn
-	listener net.Listener
-	remote   string
-	target   string
-	client   string
-	timeout  time.Duration
-	writeMu  sync.Mutex
-	mu       sync.Mutex
-	pending  map[string]*pendingConn
-	active   map[net.Conn]struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	state     *serverState
+	logger    *log.Logger
+	control   net.Conn
+	listener  net.Listener
+	remote    string
+	target    string
+	client    string
+	timeout   time.Duration
+	closeOnce sync.Once
+	writeMu   sync.Mutex
+	mu        sync.Mutex
+	pending   map[string]*pendingConn
+	active    map[net.Conn]struct{}
 }
 
 type pendingConn struct {
@@ -159,6 +160,7 @@ func RunServer(ctx context.Context, cfg ServerConfig, logger *log.Logger) error 
 	go func() {
 		<-ctx.Done()
 		tunnelListener.Close()
+		state.closeAllTunnels()
 		httpServer.Shutdown(context.Background())
 	}()
 	go func() {
@@ -324,31 +326,25 @@ func (t *tunnel) monitorControl() {
 		err := writePing(t.control)
 		t.writeMu.Unlock()
 		if err != nil {
-			t.closeForControlFailure()
+			t.close()
 			return
 		}
 		if err := t.control.SetReadDeadline(time.Now().Add(t.state.heartbeatTimeout)); err != nil {
-			t.closeForControlFailure()
+			t.close()
 			return
 		}
 		line, err := readHeader(t.control)
 		_ = t.control.SetReadDeadline(time.Time{})
 		if err != nil {
-			t.closeForControlFailure()
+			t.close()
 			return
 		}
 		if line != "PONG" {
 			t.logger.Printf("control connection protocol error from %s", t.client)
-			t.closeForControlFailure()
+			t.close()
 			return
 		}
 	}
-}
-
-func (t *tunnel) closeForControlFailure() {
-	t.cancel()
-	t.control.Close()
-	t.listener.Close()
 }
 
 func handleDataConn(cfg ServerConfig, state *serverState, logger *log.Logger, conn net.Conn, line string) {
@@ -386,21 +382,23 @@ func handleDataConn(cfg ServerConfig, state *serverState, logger *log.Logger, co
 }
 
 func (t *tunnel) close() {
-	t.cancel()
-	t.listener.Close()
-	t.control.Close()
-	t.mu.Lock()
-	for id, pc := range t.pending {
-		delete(t.pending, id)
-		pc.timer.Stop()
-		pc.remote.Close()
-	}
-	for conn := range t.active {
-		conn.Close()
-	}
-	t.mu.Unlock()
-	t.state.removeTunnel(t)
-	t.logger.Printf("remote listener closed on %s for %s", t.remote, t.client)
+	t.closeOnce.Do(func() {
+		t.cancel()
+		t.listener.Close()
+		t.control.Close()
+		t.mu.Lock()
+		for id, pc := range t.pending {
+			delete(t.pending, id)
+			pc.timer.Stop()
+			pc.remote.Close()
+		}
+		for conn := range t.active {
+			conn.Close()
+		}
+		t.mu.Unlock()
+		t.state.removeTunnel(t)
+		t.logger.Printf("remote listener closed on %s for %s", t.remote, t.client)
+	})
 }
 
 func (t *tunnel) addActive(conn net.Conn) {
@@ -456,6 +454,18 @@ func (s *serverState) removeTunnel(t *tunnel) {
 	s.mu.Lock()
 	delete(s.tunnels, t)
 	s.mu.Unlock()
+}
+
+func (s *serverState) closeAllTunnels() {
+	s.mu.Lock()
+	tunnels := make([]*tunnel, 0, len(s.tunnels))
+	for t := range s.tunnels {
+		tunnels = append(tunnels, t)
+	}
+	s.mu.Unlock()
+	for _, t := range tunnels {
+		t.close()
+	}
 }
 
 func (s *serverState) incAcceptedControl() { atomic.AddUint64(&s.totals.AcceptedControlConnections, 1) }

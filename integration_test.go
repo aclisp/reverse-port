@@ -260,6 +260,53 @@ func TestServerCancelDoesNotLogStatusAcceptClosed(t *testing.T) {
 	}
 }
 
+func TestServerCancelClosesActiveTunnelRemoteListener(t *testing.T) {
+	serverAddr := freeTCPAddr(t)
+	statusAddr := freeTCPAddr(t)
+	remoteAddr := freeTCPAddr(t)
+	targetAddr, closeTarget := startEchoServer(t)
+	defer closeTarget()
+
+	serverCtx, stopServer := context.WithCancel(context.Background())
+	serverDone := make(chan error, 1)
+	go func() {
+		serverDone <- RunServer(serverCtx, ServerConfig{
+			Listen:       serverAddr,
+			StatusListen: statusAddr,
+			OpenTimeout:  time.Second,
+			Token:        "secret",
+		}, testLogger(t))
+	}()
+	waitForDial(t, serverAddr)
+
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	defer stopClient()
+	go func() {
+		err := RunClient(clientCtx, ClientConfig{
+			Server:            serverAddr,
+			Remote:            remoteAddr,
+			Target:            targetAddr,
+			Token:             "secret",
+			ReconnectInterval: time.Second,
+		}, testLogger(t))
+		if err != nil {
+			t.Errorf("RunClient error = %v", err)
+		}
+	}()
+	waitForDial(t, remoteAddr)
+
+	stopServer()
+	select {
+	case err := <-serverDone:
+		if err != nil {
+			t.Fatalf("RunServer returned error after cancel: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("RunServer did not stop after context cancellation")
+	}
+	waitForDialFailure(t, remoteAddr)
+}
+
 func TestInitialHeaderReadTimesOut(t *testing.T) {
 	serverSide, clientSide := net.Pipe()
 	defer clientSide.Close()
