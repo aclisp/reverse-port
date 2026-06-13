@@ -283,21 +283,18 @@ func (t *tunnel) run() {
 			continue
 		}
 		pc := &pendingConn{remote: remoteConn}
-		pc.timer = time.AfterFunc(t.timeout, func() {
-			t.mu.Lock()
-			if pending, ok := t.pending[id]; ok {
-				delete(t.pending, id)
-				pending.remote.Close()
-			}
-			t.mu.Unlock()
-		})
-		t.mu.Lock()
-		t.pending[id] = pc
-		t.mu.Unlock()
+		if !t.addPending(id, pc) {
+			t.logger.Printf("remote connection rejected on %s: tunnel capacity reached", t.remote)
+			remoteConn.Close()
+			continue
+		}
 		t.writeMu.Lock()
 		err = writeOpen(t.control, id)
 		t.writeMu.Unlock()
 		if err != nil {
+			if pending := t.takePending(id); pending != nil {
+				pending.timer.Stop()
+			}
 			remoteConn.Close()
 			return
 		}
@@ -307,6 +304,25 @@ func (t *tunnel) run() {
 func (t *tunnel) canAcceptRemote() bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	return t.hasCapacityLocked()
+}
+
+func (t *tunnel) addPending(id string, pc *pendingConn) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.hasCapacityLocked() {
+		return false
+	}
+	pc.timer = time.AfterFunc(t.timeout, func() {
+		if pending := t.takePending(id); pending != nil {
+			pending.remote.Close()
+		}
+	})
+	t.pending[id] = pc
+	return true
+}
+
+func (t *tunnel) hasCapacityLocked() bool {
 	if len(t.pending) >= t.state.maxPendingConnections {
 		return false
 	}
@@ -364,7 +380,7 @@ func handleDataConn(cfg ServerConfig, state *serverState, logger *log.Logger, co
 		conn.Close()
 		return
 	}
-	if !t.canActivate() {
+	if !t.activatePair(conn, pc.remote) {
 		state.incRejectedData()
 		logger.Printf("rejected data connection from %s: tunnel active capacity reached", conn.RemoteAddr())
 		conn.Close()
@@ -374,8 +390,6 @@ func handleDataConn(cfg ServerConfig, state *serverState, logger *log.Logger, co
 	}
 	state.incAcceptedData()
 	pc.timer.Stop()
-	t.addActive(conn)
-	t.addActive(pc.remote)
 	defer t.removeActive(conn)
 	defer t.removeActive(pc.remote)
 	pipeBidirectional(t.ctx, pc.remote, conn)
@@ -389,7 +403,9 @@ func (t *tunnel) close() {
 		t.mu.Lock()
 		for id, pc := range t.pending {
 			delete(t.pending, id)
-			pc.timer.Stop()
+			if pc.timer != nil {
+				pc.timer.Stop()
+			}
 			pc.remote.Close()
 		}
 		for conn := range t.active {
@@ -401,16 +417,15 @@ func (t *tunnel) close() {
 	})
 }
 
-func (t *tunnel) addActive(conn net.Conn) {
-	t.mu.Lock()
-	t.active[conn] = struct{}{}
-	t.mu.Unlock()
-}
-
-func (t *tunnel) canActivate() bool {
+func (t *tunnel) activatePair(a, b net.Conn) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.activeConnectionCountLocked() < t.state.maxActiveConnections
+	if t.activeConnectionCountLocked() >= t.state.maxActiveConnections {
+		return false
+	}
+	t.active[a] = struct{}{}
+	t.active[b] = struct{}{}
+	return true
 }
 
 func (t *tunnel) removeActive(conn net.Conn) {
@@ -442,6 +457,17 @@ func (s *serverState) takePending(id string) (*tunnel, *pendingConn) {
 		}
 	}
 	return nil, nil
+}
+
+func (t *tunnel) takePending(id string) *pendingConn {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	pc, ok := t.pending[id]
+	if !ok {
+		return nil
+	}
+	delete(t.pending, id)
+	return pc
 }
 
 func (s *serverState) addTunnel(t *tunnel) {
