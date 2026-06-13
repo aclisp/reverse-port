@@ -21,6 +21,8 @@ type ServerConfig struct {
 	OpenTimeout           time.Duration
 	MaxPendingConnections int
 	MaxActiveConnections  int
+	HeartbeatInterval     time.Duration
+	HeartbeatTimeout      time.Duration
 	Token                 string
 }
 
@@ -31,6 +33,8 @@ type serverState struct {
 	statusListen          string
 	maxPendingConnections int
 	maxActiveConnections  int
+	heartbeatInterval     time.Duration
+	heartbeatTimeout      time.Duration
 	mu                    sync.Mutex
 	tunnels               map[*tunnel]struct{}
 	totals                statusTotals
@@ -108,11 +112,26 @@ func RunServer(ctx context.Context, cfg ServerConfig, logger *log.Logger) error 
 	if cfg.MaxActiveConnections == 0 {
 		cfg.MaxActiveConnections = defaultMaxActive
 	}
+	if cfg.HeartbeatInterval == 0 {
+		cfg.HeartbeatInterval = defaultHeartbeatInterval
+	}
+	if cfg.HeartbeatTimeout == 0 {
+		cfg.HeartbeatTimeout = defaultHeartbeatTimeout
+	}
 	if cfg.MaxPendingConnections < 0 {
 		return fmt.Errorf("max pending connections must be positive")
 	}
 	if cfg.MaxActiveConnections < 0 {
 		return fmt.Errorf("max active connections must be positive")
+	}
+	if cfg.HeartbeatInterval < 0 {
+		return fmt.Errorf("heartbeat interval must be positive")
+	}
+	if cfg.HeartbeatTimeout < 0 {
+		return fmt.Errorf("heartbeat timeout must be positive")
+	}
+	if cfg.HeartbeatTimeout <= cfg.HeartbeatInterval {
+		return fmt.Errorf("heartbeat timeout must be greater than heartbeat interval")
 	}
 
 	tunnelListener, err := net.Listen("tcp", cfg.Listen)
@@ -132,6 +151,8 @@ func RunServer(ctx context.Context, cfg ServerConfig, logger *log.Logger) error 
 		statusListen:          statusListener.Addr().String(),
 		maxPendingConnections: cfg.MaxPendingConnections,
 		maxActiveConnections:  cfg.MaxActiveConnections,
+		heartbeatInterval:     cfg.HeartbeatInterval,
+		heartbeatTimeout:      cfg.HeartbeatTimeout,
 		tunnels:               make(map[*tunnel]struct{}),
 	}
 	httpServer := &http.Server{Handler: statusHandler(state)}
@@ -241,7 +262,7 @@ func handleControlConn(ctx context.Context, cfg ServerConfig, state *serverState
 
 func (t *tunnel) run() {
 	defer t.close()
-	go t.watchControl()
+	go t.monitorControl()
 	for {
 		remoteConn, err := t.listener.Accept()
 		if err != nil {
@@ -290,15 +311,44 @@ func (t *tunnel) canAcceptRemote() bool {
 	return t.activeConnectionCountLocked() < t.state.maxActiveConnections
 }
 
-func (t *tunnel) watchControl() {
-	var one [1]byte
+func (t *tunnel) monitorControl() {
+	ticker := time.NewTicker(t.state.heartbeatInterval)
+	defer ticker.Stop()
 	for {
-		if _, err := t.control.Read(one[:]); err != nil {
-			t.cancel()
-			t.listener.Close()
+		select {
+		case <-t.ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		t.writeMu.Lock()
+		err := writePing(t.control)
+		t.writeMu.Unlock()
+		if err != nil {
+			t.closeForControlFailure()
+			return
+		}
+		if err := t.control.SetReadDeadline(time.Now().Add(t.state.heartbeatTimeout)); err != nil {
+			t.closeForControlFailure()
+			return
+		}
+		line, err := readHeader(t.control)
+		_ = t.control.SetReadDeadline(time.Time{})
+		if err != nil {
+			t.closeForControlFailure()
+			return
+		}
+		if line != "PONG" {
+			t.logger.Printf("control connection protocol error from %s", t.client)
+			t.closeForControlFailure()
 			return
 		}
 	}
+}
+
+func (t *tunnel) closeForControlFailure() {
+	t.cancel()
+	t.control.Close()
+	t.listener.Close()
 }
 
 func handleDataConn(cfg ServerConfig, state *serverState, logger *log.Logger, conn net.Conn, line string) {

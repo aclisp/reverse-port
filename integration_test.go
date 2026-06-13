@@ -274,6 +274,104 @@ func TestInitialHeaderReadTimesOut(t *testing.T) {
 	}
 }
 
+func TestHeartbeatKeepsResponsiveClientTunnelAlive(t *testing.T) {
+	serverAddr := freeTCPAddr(t)
+	statusAddr := freeTCPAddr(t)
+	remoteAddr := freeTCPAddr(t)
+	targetAddr, closeTarget := startEchoServer(t)
+	defer closeTarget()
+
+	serverCtx, stopServer := context.WithCancel(context.Background())
+	defer stopServer()
+	go func() {
+		err := RunServer(serverCtx, ServerConfig{
+			Listen:            serverAddr,
+			StatusListen:      statusAddr,
+			OpenTimeout:       time.Second,
+			HeartbeatInterval: 20 * time.Millisecond,
+			HeartbeatTimeout:  200 * time.Millisecond,
+			Token:             "secret",
+		}, testLogger(t))
+		if err != nil {
+			t.Errorf("RunServer error = %v", err)
+		}
+	}()
+	waitForDial(t, serverAddr)
+
+	clientCtx, stopClient := context.WithCancel(context.Background())
+	defer stopClient()
+	go func() {
+		err := RunClient(clientCtx, ClientConfig{
+			Server:            serverAddr,
+			Remote:            remoteAddr,
+			Target:            targetAddr,
+			Token:             "secret",
+			ReconnectInterval: 50 * time.Millisecond,
+		}, testLogger(t))
+		if err != nil {
+			t.Errorf("RunClient error = %v", err)
+		}
+	}()
+	waitForDial(t, remoteAddr)
+	time.Sleep(90 * time.Millisecond)
+
+	conn, err := net.Dial("tcp", remoteAddr)
+	if err != nil {
+		t.Fatalf("dial remote after heartbeats: %v", err)
+	}
+	fmt.Fprintln(conn, "ping")
+	got, err := bufio.NewReader(conn).ReadString('\n')
+	conn.Close()
+	if err != nil {
+		t.Fatalf("read forwarded response after heartbeats: %v", err)
+	}
+	if got != "echo:ping\n" {
+		t.Fatalf("forwarded response = %q", got)
+	}
+}
+
+func TestHeartbeatTimeoutClosesStaleTunnel(t *testing.T) {
+	serverAddr := freeTCPAddr(t)
+	statusAddr := freeTCPAddr(t)
+	remoteAddr := freeTCPAddr(t)
+	targetAddr := freeTCPAddr(t)
+
+	serverCtx, stopServer := context.WithCancel(context.Background())
+	defer stopServer()
+	go func() {
+		err := RunServer(serverCtx, ServerConfig{
+			Listen:            serverAddr,
+			StatusListen:      statusAddr,
+			OpenTimeout:       time.Second,
+			HeartbeatInterval: 20 * time.Millisecond,
+			HeartbeatTimeout:  50 * time.Millisecond,
+			Token:             "secret",
+		}, testLogger(t))
+		if err != nil {
+			t.Errorf("RunServer error = %v", err)
+		}
+	}()
+	waitForDial(t, serverAddr)
+
+	control, err := net.Dial("tcp", serverAddr)
+	if err != nil {
+		t.Fatalf("dial control: %v", err)
+	}
+	defer control.Close()
+	if err := writeControlHeader(control, "secret", remoteAddr, targetAddr); err != nil {
+		t.Fatalf("write control: %v", err)
+	}
+	resp, err := bufio.NewReader(control).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read control response: %v", err)
+	}
+	if strings.TrimSpace(resp) != "OK" {
+		t.Fatalf("control response = %q, want OK", resp)
+	}
+	waitForDial(t, remoteAddr)
+	waitForDialFailure(t, remoteAddr)
+}
+
 func TestPendingConnectionCapRejectsExtraRemoteCallers(t *testing.T) {
 	serverAddr := freeTCPAddr(t)
 	statusAddr := freeTCPAddr(t)
@@ -485,6 +583,20 @@ func waitForDial(t *testing.T, addr string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", addr)
+}
+
+func waitForDialFailure(t *testing.T, addr string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", addr, 50*time.Millisecond)
+		if err != nil {
+			return
+		}
+		conn.Close()
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s to stop accepting connections", addr)
 }
 
 func waitForStatus(t *testing.T, statusAddr string, ok func(statusResponse) bool) statusResponse {

@@ -37,7 +37,7 @@ curl http://127.0.0.1:9001/status
 Server:
 
 ```bash
-rpf server [--listen :9000] [--status-listen 127.0.0.1:9001] [--open-timeout 10s] [--max-pending 128] [--max-active 1024] [--token secret]
+rpf server [--listen :9000] [--status-listen 127.0.0.1:9001] [--open-timeout 10s] [--max-pending 128] [--max-active 1024] [--heartbeat-interval 30s] [--heartbeat-timeout 90s] [--token secret]
 ```
 
 Client:
@@ -51,6 +51,11 @@ contain whitespace.
 
 `--max-pending` and `--max-active` are per-tunnel limits. When a tunnel reaches
 capacity, extra remote callers are closed instead of being queued indefinitely.
+
+`--heartbeat-interval` and `--heartbeat-timeout` control server-initiated
+control connection heartbeats. If a client does not answer `PING` with `PONG`
+before the timeout, the server closes that tunnel and releases its remote
+listener.
 
 ## How it works
 

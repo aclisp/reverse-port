@@ -19,6 +19,8 @@ const (
 	defaultReconnectInterval = 5 * time.Second
 	defaultMaxPending        = 128
 	defaultMaxActive         = 1024
+	defaultHeartbeatInterval = 30 * time.Second
+	defaultHeartbeatTimeout  = 90 * time.Second
 )
 
 func main() {
@@ -71,6 +73,8 @@ func parseServerFlags(args []string, getenv func(string) string, stderr io.Write
 		OpenTimeout:           defaultOpenTimeout,
 		MaxPendingConnections: defaultMaxPending,
 		MaxActiveConnections:  defaultMaxActive,
+		HeartbeatInterval:     defaultHeartbeatInterval,
+		HeartbeatTimeout:      defaultHeartbeatTimeout,
 	}
 	fs := flag.NewFlagSet("server", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -80,6 +84,8 @@ func parseServerFlags(args []string, getenv func(string) string, stderr io.Write
 	fs.DurationVar(&cfg.OpenTimeout, "open-timeout", cfg.OpenTimeout, "pending data attach timeout")
 	fs.IntVar(&cfg.MaxPendingConnections, "max-pending", cfg.MaxPendingConnections, "maximum pending remote connections per tunnel")
 	fs.IntVar(&cfg.MaxActiveConnections, "max-active", cfg.MaxActiveConnections, "maximum active forwarded connections per tunnel")
+	fs.DurationVar(&cfg.HeartbeatInterval, "heartbeat-interval", cfg.HeartbeatInterval, "control connection heartbeat interval")
+	fs.DurationVar(&cfg.HeartbeatTimeout, "heartbeat-timeout", cfg.HeartbeatTimeout, "control connection heartbeat timeout")
 	fs.StringVar(&token, "token", "", "shared authentication token")
 	if err := fs.Parse(args); err != nil {
 		serverUsage(stderr)
@@ -118,6 +124,21 @@ func parseServerFlags(args []string, getenv func(string) string, stderr io.Write
 	}
 	if cfg.MaxActiveConnections <= 0 {
 		fmt.Fprintln(stderr, "--max-active must be positive")
+		serverUsage(stderr)
+		return cfg, false
+	}
+	if cfg.HeartbeatInterval <= 0 {
+		fmt.Fprintln(stderr, "--heartbeat-interval must be positive")
+		serverUsage(stderr)
+		return cfg, false
+	}
+	if cfg.HeartbeatTimeout <= 0 {
+		fmt.Fprintln(stderr, "--heartbeat-timeout must be positive")
+		serverUsage(stderr)
+		return cfg, false
+	}
+	if cfg.HeartbeatTimeout <= cfg.HeartbeatInterval {
+		fmt.Fprintln(stderr, "--heartbeat-timeout must be greater than --heartbeat-interval")
 		serverUsage(stderr)
 		return cfg, false
 	}
@@ -193,7 +214,7 @@ func printTopUsage(w io.Writer) {
 }
 
 func serverUsage(w io.Writer) {
-	fmt.Fprintln(w, "usage: rpf server [--listen :9000] [--status-listen 127.0.0.1:9001] [--open-timeout 10s] [--max-pending 128] [--max-active 1024] [--token secret]")
+	fmt.Fprintln(w, "usage: rpf server [--listen :9000] [--status-listen 127.0.0.1:9001] [--open-timeout 10s] [--max-pending 128] [--max-active 1024] [--heartbeat-interval 30s] [--heartbeat-timeout 90s] [--token secret]")
 }
 
 func clientUsage(w io.Writer) {

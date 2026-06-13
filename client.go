@@ -87,6 +87,12 @@ func runClientSession(ctx context.Context, cfg ClientConfig, logger *log.Logger)
 			return err
 		}
 		line = strings.TrimSpace(line)
+		if line == "PING" {
+			if err := writePong(conn); err != nil {
+				return err
+			}
+			continue
+		}
 		parts := strings.Fields(line)
 		if len(parts) != 2 || parts[0] != "OPEN" {
 			return fmt.Errorf("malformed server request")

@@ -89,6 +89,16 @@ func writeOpen(w io.Writer, id string) error {
 	return err
 }
 
+func writePing(w io.Writer) error {
+	_, err := fmt.Fprintln(w, "PING")
+	return err
+}
+
+func writePong(w io.Writer) error {
+	_, err := fmt.Fprintln(w, "PONG")
+	return err
+}
+
 func tokenEqual(a, b string) bool {
 	return hmac.Equal([]byte(a), []byte(b))
 }
