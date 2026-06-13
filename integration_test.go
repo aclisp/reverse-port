@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -232,7 +233,7 @@ func TestClientStopsOnContextCancel(t *testing.T) {
 func TestServerCancelDoesNotLogStatusAcceptClosed(t *testing.T) {
 	serverAddr := freeTCPAddr(t)
 	statusAddr := freeTCPAddr(t)
-	var logs bytes.Buffer
+	logs := &syncBuffer{}
 
 	serverCtx, stopServer := context.WithCancel(context.Background())
 	serverDone := make(chan error, 1)
@@ -242,7 +243,7 @@ func TestServerCancelDoesNotLogStatusAcceptClosed(t *testing.T) {
 			StatusListen: statusAddr,
 			OpenTimeout:  time.Second,
 			Token:        "secret",
-		}, log.New(&logs, "", 0))
+		}, log.New(logs, "", 0))
 	}()
 	waitForDial(t, serverAddr)
 
@@ -258,6 +259,23 @@ func TestServerCancelDoesNotLogStatusAcceptClosed(t *testing.T) {
 	if strings.Contains(logs.String(), "status server stopped") || strings.Contains(logs.String(), "use of closed network connection") {
 		t.Fatalf("server logged expected shutdown noise: %s", logs.String())
 	}
+}
+
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func TestServerCancelClosesActiveTunnelRemoteListener(t *testing.T) {

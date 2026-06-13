@@ -335,6 +335,7 @@ func (t *tunnel) monitorControl() {
 	for {
 		select {
 		case <-t.ctx.Done():
+			t.close()
 			return
 		case <-ticker.C:
 		}
