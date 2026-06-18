@@ -14,7 +14,7 @@ ssh -R [bind_address:]port:host:hostport
 ## 功能特性
 
 - **类似 `ssh -R` 的反向 TCP 转发**：服务端绑定指定的远端地址，并将每个入站连接转发到客户端侧目标地址。
-- **小型单文件部署**：只有 `server` 和 `client` 两个子命令。
+- **单文件部署**：只有 `server` 和 `client` 两个子命令。
 - **纯 Go 标准库实现**：没有外部运行时服务、数据库或第三方包依赖。
 - **可复用的多客户端服务端**：每个认证客户端拥有一个远端监听器；只要远端绑定地址不冲突，多个客户端可以共用同一个服务端。
 - **客户端声明转发关系**：客户端发送 `--remote` 和 `--target`，服务端保持通用，不需要为每条隧道维护配置文件。
@@ -25,7 +25,7 @@ ssh -R [bind_address:]port:host:hostport
 - **陈旧隧道清理**：服务端通过 `PING` / `PONG` 心跳检测半开或失效的控制连接，同时服务端和客户端都支持 SIGINT/SIGTERM 清理。
 - **支持半关闭的双向转发**：保持正常 TCP EOF 语义，活跃转发流不设置空闲超时。
 - **仅回环监听的状态接口**：`GET /status` 返回当前计数、累计计数和活跃隧道摘要，不包含 token 或连接 ID。
-- **服务端资源控制**：包含 pending open 上限、活跃转发连接上限、初始协议头读取超时和 pending 数据连接等待超时。
+- **服务端资源控制**：包含 pending open 上限、活跃转发连接上限和 pending 数据连接等待超时，外加固定的初始协议头读取超时（10s）。
 - **不会记录密钥的 token 认证**：token 来自 `--token` 或 `RPORT_TOKEN`，使用常量时间比较，并且不会出现在状态响应或日志中。
 - **明确的安全边界**：token 认证不是加密。如果流量经过不可信网络，请使用可信网络、VPN、TLS 包装或其他传输安全层。
 - **有意收窄的 v1 范围**：仅 TCP、自定义协议、每个客户端进程一条隧道、不兼容 SSH、无内置 TLS、无 Unix socket、无状态接口认证、无绑定 ACL，不支持远端或目标端口 `0`。
@@ -113,7 +113,7 @@ ExecStart=/opt/reverse-port/rpf server --listen :9000 --status-listen 127.0.0.1:
 KillSignal=SIGTERM
 # How long systemd waits for the app to stop before sending SIGKILL
 TimeoutStopSec=30s
-# Ensures systemd only considers the main process for the stop signal
+# Send the stop signal to all processes in the unit's control group
 KillMode=control-group
 # restart policy
 # one of {no|on-success|on-failure|on-abnormal|on-watchdog|on-abort|always}
@@ -178,7 +178,7 @@ WantedBy=multi-user.target
 |---|---|
 | 已建立 TCP 连接 | N + 3M |
 | 服务端监听器 | N + 2 |
-| 总 goroutine 数量（服务端 + 所有客户端） | 2 + 4N + 8M |
+| 总 goroutine 数量（服务端 + 所有客户端） | 3 + 4N + 8M |
 
 每条隧道的开销：1 条持久 TCP 连接，4 个 goroutine（服务端 2 个，客户端 2 个）。每条活跃转发连接的开销：3 条 TCP 连接，8 个 goroutine（服务端 4 个，客户端 4 个）。
 

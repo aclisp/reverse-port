@@ -20,12 +20,12 @@ Plus N + 2 listening sockets on the server: 1 tunnel listener, 1 status listener
 
 | Component | Count |
 |---|---|
-| Fixed infrastructure (ctx watcher, HTTP serve) | 2 |
+| Fixed infrastructure (tunnel listener accept loop, ctx watcher, HTTP serve) | 3 |
 | Per tunnel: `handleServerConn` accept loop | N |
 | Per tunnel: `monitorControl` | N |
 | Per active connection: `handleDataConn` (blocked in `pipeBidirectional`) | M |
 | Per active connection: 2x `pipeOneWay` + 1x `wg.Wait` closer | 3M |
-| **Total** | **2 + 2N + 4M** |
+| **Total** | **3 + 2N + 4M** |
 
 ### Client side (across all N client processes)
 
@@ -37,7 +37,7 @@ Plus N + 2 listening sockets on the server: 1 tunnel listener, 1 status listener
 | Per active connection: 2x `pipeOneWay` + 1x `wg.Wait` closer | 3M |
 | **Total** | **2N + 4M** |
 
-### Grand total goroutines: 2 + 4N + 8M
+### Grand total goroutines: 3 + 4N + 8M
 
 ## Per-unit cost
 

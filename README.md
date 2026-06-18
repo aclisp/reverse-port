@@ -44,7 +44,8 @@ standard-library only, and supports one reverse forward per client process.
   cumulative totals, and active tunnel summaries without tokens or connection
   IDs.
 - **Server-side resource controls** for pending opens, active forwarded
-  connections, initial header read timeout, and pending data attach timeout.
+  connections, and pending data attach timeout, plus a fixed 10s initial header
+  read timeout.
 - **Token authentication without secret logging**: tokens come from `--token` or
   `RPORT_TOKEN`, are compared in constant time, and are excluded from status and
   logs.
@@ -143,7 +144,7 @@ ExecStart=/opt/reverse-port/rpf server --listen :9000 --status-listen 127.0.0.1:
 KillSignal=SIGTERM
 # How long systemd waits for the app to stop before sending SIGKILL
 TimeoutStopSec=30s
-# Ensures systemd only considers the main process for the stop signal
+# Send the stop signal to all processes in the unit's control group
 KillMode=control-group
 # restart policy
 # one of {no|on-success|on-failure|on-abnormal|on-watchdog|on-abort|always}
@@ -222,7 +223,7 @@ For N connected clients and M simultaneously active (forwarded) connections:
 |---|---|
 | Established TCP connections | N + 3M |
 | Server listeners | N + 2 |
-| Total goroutines (server + all clients) | 2 + 4N + 8M |
+| Total goroutines (server + all clients) | 3 + 4N + 8M |
 
 Per-tunnel overhead: 1 persistent TCP connection, 2 server goroutines, 2 client goroutines. Per active forwarded connection: 3 TCP connections and 8 goroutines (4 server-side, 4 client-side).
 
