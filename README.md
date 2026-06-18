@@ -1,5 +1,7 @@
 # rpf
 
+[README](README.md) | [中文文档](README_zh.md)
+
 `rpf` is a small reverse TCP port forwarding tool with behavior similar to:
 
 ```text
@@ -9,18 +11,76 @@ ssh -R [bind_address:]port:host:hostport
 It uses a custom minimal protocol, not SSH. The v1 implementation is TCP-only,
 standard-library only, and supports one reverse forward per client process.
 
+## Features
+
+- **Reverse TCP forwarding** similar to `ssh -R`, with the server binding a
+  requested remote address and forwarding each inbound connection to a
+  client-side target.
+- **Small single-binary deployment** with only two subcommands: `server` and
+  `client`.
+- **Standard-library-only Go implementation** with no external runtime services,
+  databases, or package dependencies.
+- **Reusable multi-client server** where each authenticated client owns one
+  remote listener, and multiple clients can share the same server when their
+  requested remote binds do not conflict.
+- **Client-selected forwarding contract**: the client sends both `--remote` and
+  `--target`, so the server stays generic and does not need per-tunnel config
+  files.
+- **OpenSSH-like remote bind semantics** for common forms such as `8080`,
+  `127.0.0.1:8080`, `:8080`, `*:8080`, and bracketed IPv6 addresses.
+- **Separate control and data connections on one server port**: the first
+  protocol line identifies `CONTROL` or `DATA`, then valid data connections
+  switch to raw TCP piping.
+- **Fresh target connection per inbound caller**, so every remote TCP connection
+  maps to a new client-side target connection.
+- **Reconnect-oriented client behavior**: bind failures, permission errors, and
+  control disconnects are retried at a fixed configurable interval while the
+  client process stays alive.
+- **Stale tunnel cleanup** through server-initiated `PING` / `PONG` heartbeats,
+  plus deterministic SIGINT/SIGTERM cleanup for server and client processes.
+- **Half-close-aware bidirectional piping** for normal TCP EOF behavior, with no
+  idle deadline on active forwarded streams.
+- **Loopback-only status endpoint** at `GET /status`, reporting current counts,
+  cumulative totals, and active tunnel summaries without tokens or connection
+  IDs.
+- **Server-side resource controls** for pending opens, active forwarded
+  connections, initial header read timeout, and pending data attach timeout.
+- **Token authentication without secret logging**: tokens come from `--token` or
+  `RPORT_TOKEN`, are compared in constant time, and are excluded from status and
+  logs.
+- **Explicit security boundary**: token auth is not encryption. Use a trusted
+  network, VPN, TLS wrapper, or another transport security layer when traffic
+  crosses untrusted networks.
+- **Intentional v1 scope limits**: TCP only, custom protocol only, one tunnel per
+  client process, no SSH compatibility, no built-in TLS, no Unix sockets, no
+  status auth, no bind ACLs, and no remote or target port `0`.
+
+## Build
+
+Build for the current platform:
+
+```bash
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o rpf .
+```
+
+Cross-compile for Linux AMD64:
+
+```bash
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o rpf-linux-amd64 .
+```
+
 ## Usage
 
 Start the server:
 
 ```bash
-RPORT_TOKEN=secret go run . server
+RPORT_TOKEN=secret ./rpf server
 ```
 
 Start a client tunnel:
 
 ```bash
-RPORT_TOKEN=secret go run . client \
+RPORT_TOKEN=secret ./rpf client \
   --server 127.0.0.1:9000 \
   --remote 127.0.0.1:8080 \
   --target 127.0.0.1:3000
